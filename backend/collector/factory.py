@@ -3,6 +3,7 @@ from collector.base import AbstractCrawler
 CRAWLER_REGISTRY = {
     "bilibili": "collector.bilibili.crawler.BilibiliCrawler",
     "xhs": "collector.xhs.crawler.XhsCrawler",
+    "douyin": "collector.douyin.crawler.DouyinCrawler",
 }
 
 

@@ -44,6 +44,7 @@
           <el-select v-model="form.platform">
             <el-option label="B站" value="bilibili" />
             <el-option label="小红书" value="xhs" />
+            <el-option label="抖音" value="douyin" />
           </el-select>
         </el-form-item>
         <el-form-item label="Cookies">
@@ -78,10 +79,20 @@ const loadAccounts = async () => {
 }
 
 const createAccount = async () => {
-  await http.post('/api/accounts', form.value)
-  dialogVisible.value = false
-  ElMessage.success('账号已添加')
-  loadAccounts()
+  try {
+    await http.post('/api/accounts', form.value)
+    dialogVisible.value = false
+    ElMessage.success('账号已添加')
+    form.value = { account_name: '', platform: 'bilibili', cookies: '', daily_limit: 20 }
+    loadAccounts()
+  } catch (e: any) {
+    const status = e?.response?.status
+    const detail = e?.response?.data?.detail
+    const msg = Array.isArray(detail)
+      ? detail.map((d: any) => d.msg).join('; ')
+      : (detail || e?.message || '未知错误')
+    ElMessage.error(`添加失败 (${status ?? '网络错误'}): ${msg}`)
+  }
 }
 
 const deleteAccount = async (id: number) => {
@@ -105,8 +116,10 @@ const checkCookie = async (row: any) => {
       row._cookieStatus = 'unknown'
       ElMessage.info(data.msg || '暂不支持检测')
     }
-  } catch {
-    ElMessage.error('检测请求失败')
+  } catch (e: any) {
+    const status = e?.response?.status
+    const detail = e?.response?.data?.detail || e?.response?.data?.msg || e?.message || '未知错误'
+    ElMessage.error(`检测失败 (${status ?? '网络错误'}): ${detail}`)
   } finally {
     row._checking = false
   }

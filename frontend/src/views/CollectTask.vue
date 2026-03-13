@@ -62,6 +62,7 @@
           <el-select v-model="form.platform" @change="onPlatformChange">
             <el-option label="小红书" value="xhs" />
             <el-option label="Bilibili" value="bilibili" />
+            <el-option label="抖音" value="douyin" />
           </el-select>
         </el-form-item>
         <el-form-item label="类型">
@@ -256,6 +257,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const platformMap: Record<string, string> = {
   bilibili: 'Bilibili',
   xhs: '小红书',
+  douyin: '抖音',
 }
 const typeMap: Record<string, string> = {
   keyword: '关键词搜索',
@@ -287,7 +289,7 @@ const form = ref({
 })
 
 const taskTypeOptions = computed(() => {
-  if (form.value.platform === 'xhs') {
+  if (form.value.platform === 'xhs' || form.value.platform === 'douyin') {
     return [{ label: '关键词搜索', value: 'keyword' }]
   }
   return [
