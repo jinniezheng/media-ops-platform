@@ -25,7 +25,7 @@
           批量发送 ({{ confirmedSelectedCount }})
         </el-button>
       </div>
-      <el-table :data="records" stripe @selection-change="onSelectionChange">
+      <el-table :data="pagedRecords" stripe @selection-change="onSelectionChange">
         <el-table-column type="selection" width="45" />
         <el-table-column label="平台" width="80">
           <template #default="{ row }">
@@ -96,16 +96,29 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination
+        style="margin-top:16px;justify-content:flex-end"
+        background layout="total, sizes, prev, pager, next"
+        :total="records.length" :page-sizes="[10, 20, 50, 100]"
+        v-model:page-size="pageSize" v-model:current-page="currentPage"
+      />
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import http from '../api/http'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const records = ref<any[]>([])
+const pageSize = ref(10)
+const currentPage = ref(1)
+const pagedRecords = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return records.value.slice(start, start + pageSize.value)
+})
+watch(pageSize, () => { currentPage.value = 1 })
 const accounts = ref<any[]>([])
 const selectedAccountId = ref<number | null>(null)
 const selectedRows = ref<any[]>([])

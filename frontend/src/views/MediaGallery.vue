@@ -97,9 +97,10 @@
 
       <el-pagination
         style="margin-top:16px;justify-content:flex-end"
-        layout="total, prev, pager, next"
+        layout="total, sizes, prev, pager, next"
         :total="total"
-        :page-size="pageSize"
+        :page-sizes="[10, 20, 50, 100]"
+        v-model:page-size="pageSize"
         @current-change="onPageChange"
       />
     </el-card>
@@ -107,7 +108,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import http from '../api/http'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Download } from '@element-plus/icons-vue'
@@ -117,7 +118,8 @@ const videos = ref<any[]>([])
 const images = ref<any[]>([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = computed(() => mediaType.value === 'video' ? 20 : 50)
+const pageSize = ref(10)
+watch(pageSize, () => { page.value = 1; loadData() })
 const selectedRows = ref<any[]>([])
 const downloading = ref(false)
 

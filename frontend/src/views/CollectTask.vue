@@ -7,7 +7,7 @@
           <el-button type="primary" @click="dialogVisible = true">新建任务</el-button>
         </div>
       </template>
-      <el-table :data="tasks" stripe>
+      <el-table :data="pagedTasks" stripe>
         <el-table-column prop="name" label="任务名称" />
         <el-table-column label="平台" width="100">
           <template #default="{ row }">
@@ -50,6 +50,12 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination
+        style="margin-top:16px;justify-content:flex-end"
+        background layout="total, sizes, prev, pager, next"
+        :total="tasks.length" :page-sizes="[10, 20, 50, 100]"
+        v-model:page-size="taskPageSize" v-model:current-page="taskCurrentPage"
+      />
     </el-card>
 
     <!-- 新建任务对话框 -->
@@ -88,7 +94,7 @@
 
     <!-- 视频列表对话框 (Bilibili) -->
     <el-dialog v-model="videoDialogVisible" title="采集到的视频" width="900px">
-      <el-table :data="videoList" stripe
+      <el-table :data="pagedVideoList" stripe
         @selection-change="onVideoSelectionChange">
         <el-table-column type="selection" width="45" />
         <el-table-column label="标题" min-width="240">
@@ -114,6 +120,10 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination style="margin-top:12px;justify-content:flex-end" background
+        layout="total, sizes, prev, pager, next" :total="videoList.length"
+        :page-sizes="[10, 20, 50]" v-model:page-size="videoPageSize"
+        v-model:current-page="videoCurrentPage" />
       <template #footer>
         <span style="float:left;line-height:32px;color:#909399">
           已选 {{ selectedVideos.length }} 个视频
@@ -128,7 +138,7 @@
 
     <!-- 评论列表对话框 (Bilibili) -->
     <el-dialog v-model="commentDialogVisible" :title="`评论详情 — ${currentVideoTitle}`" width="750px">
-      <el-table :data="commentList" stripe
+      <el-table :data="pagedCommentList" stripe
         @selection-change="onCommentSelectionChange">
         <el-table-column type="selection" width="45" />
         <el-table-column prop="uname" label="用户" width="120" />
@@ -140,6 +150,10 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination style="margin-top:12px;justify-content:flex-end" background
+        layout="total, sizes, prev, pager, next" :total="commentList.length"
+        :page-sizes="[10, 20, 50]" v-model:page-size="commentPageSize"
+        v-model:current-page="commentCurrentPage" />
       <template #footer>
         <span style="float:left;line-height:32px;color:#909399">
           已选 {{ selectedComments.length }} 条
@@ -154,7 +168,7 @@
 
     <!-- XHS 笔记列表对话框 -->
     <el-dialog v-model="xhsNoteDialogVisible" title="采集到的笔记" width="900px">
-      <el-table :data="xhsNoteList" stripe
+      <el-table :data="pagedXhsNoteList" stripe
         @selection-change="onXhsNoteSelectionChange">
         <el-table-column type="selection" width="45" />
         <el-table-column label="标题" min-width="240">
@@ -170,6 +184,11 @@
         <el-table-column prop="collected_count" label="收藏" width="80" />
         <el-table-column prop="comment_count" label="评论" width="80" />
         <el-table-column prop="type" label="类型" width="70" />
+        <el-table-column label="发布时间" width="160">
+          <template #default="{ row }">
+            {{ row.time ? formatTime(row.time / 1000) : '-' }}
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="80">
           <template #default="{ row }">
             <el-button size="small"
@@ -179,6 +198,10 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination style="margin-top:12px;justify-content:flex-end" background
+        layout="total, sizes, prev, pager, next" :total="xhsNoteList.length"
+        :page-sizes="[10, 20, 50]" v-model:page-size="xhsNotePageSize"
+        v-model:current-page="xhsNoteCurrentPage" />
       <template #footer>
         <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
           <span style="color:#909399">
@@ -209,7 +232,7 @@
     <!-- XHS 评论列表对话框 -->
     <el-dialog v-model="xhsCommentDialogVisible"
       :title="`评论详情 — ${currentXhsNoteTitle}`" width="750px">
-      <el-table :data="xhsCommentList" stripe
+      <el-table :data="pagedXhsCommentList" stripe
         @selection-change="onXhsCommentSelectionChange">
         <el-table-column type="selection" width="45" />
         <el-table-column prop="nickname" label="用户" width="120" />
@@ -223,6 +246,10 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination style="margin-top:12px;justify-content:flex-end" background
+        layout="total, sizes, prev, pager, next" :total="xhsCommentList.length"
+        :page-sizes="[10, 20, 50]" v-model:page-size="xhsCommentPageSize"
+        v-model:current-page="xhsCommentCurrentPage" />
       <template #footer>
         <div style="display:flex;justify-content:space-between;align-items:center;width:100%">
           <span style="color:#909399">
@@ -249,7 +276,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import http from '../api/http'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -280,6 +307,14 @@ const formatTime = (ts: number) => {
 }
 
 const tasks = ref<any[]>([])
+const taskPageSize = ref(10)
+const taskCurrentPage = ref(1)
+const pagedTasks = computed(() => {
+  const start = (taskCurrentPage.value - 1) * taskPageSize.value
+  return tasks.value.slice(start, start + taskPageSize.value)
+})
+watch(taskPageSize, () => { taskCurrentPage.value = 1 })
+
 const dialogVisible = ref(false)
 const form = ref({
   name: '', platform: 'xhs', task_type: 'keyword',
@@ -333,9 +368,25 @@ const viewResult = (row: any) => {
 // ── Bilibili state ──────────────────────────────────────────
 const videoDialogVisible = ref(false)
 const videoList = ref<any[]>([])
+const videoPageSize = ref(10)
+const videoCurrentPage = ref(1)
+const pagedVideoList = computed(() => {
+  const start = (videoCurrentPage.value - 1) * videoPageSize.value
+  return videoList.value.slice(start, start + videoPageSize.value)
+})
+watch(videoPageSize, () => { videoCurrentPage.value = 1 })
+
 const selectedVideos = ref<any[]>([])
 const commentDialogVisible = ref(false)
 const commentList = ref<any[]>([])
+const commentPageSize = ref(10)
+const commentCurrentPage = ref(1)
+const pagedCommentList = computed(() => {
+  const start = (commentCurrentPage.value - 1) * commentPageSize.value
+  return commentList.value.slice(start, start + commentPageSize.value)
+})
+watch(commentPageSize, () => { commentCurrentPage.value = 1 })
+
 const currentVideoTitle = ref('')
 const currentVideoAid = ref(0)
 const selectedComments = ref<any[]>([])
@@ -343,9 +394,25 @@ const selectedComments = ref<any[]>([])
 // ── XHS state ───────────────────────────────────────────────
 const xhsNoteDialogVisible = ref(false)
 const xhsNoteList = ref<any[]>([])
+const xhsNotePageSize = ref(10)
+const xhsNoteCurrentPage = ref(1)
+const pagedXhsNoteList = computed(() => {
+  const start = (xhsNoteCurrentPage.value - 1) * xhsNotePageSize.value
+  return xhsNoteList.value.slice(start, start + xhsNotePageSize.value)
+})
+watch(xhsNotePageSize, () => { xhsNoteCurrentPage.value = 1 })
+
 const selectedXhsNotes = ref<any[]>([])
 const xhsCommentDialogVisible = ref(false)
 const xhsCommentList = ref<any[]>([])
+const xhsCommentPageSize = ref(10)
+const xhsCommentCurrentPage = ref(1)
+const pagedXhsCommentList = computed(() => {
+  const start = (xhsCommentCurrentPage.value - 1) * xhsCommentPageSize.value
+  return xhsCommentList.value.slice(start, start + xhsCommentPageSize.value)
+})
+watch(xhsCommentPageSize, () => { xhsCommentCurrentPage.value = 1 })
+
 const selectedXhsComments = ref<any[]>([])
 const currentXhsNoteTitle = ref('')
 const currentXhsNoteId = ref('')
@@ -397,6 +464,7 @@ const runTask = async (row: any) => {
 
 const viewVideos = async (taskId: number) => {
   selectedVideos.value = []
+  videoCurrentPage.value = 1
   try {
     const { data } = await http.get('/api/collect/videos', { params: { task_id: taskId } })
     videoList.value = data.items
@@ -427,6 +495,7 @@ const addVideosToTouch = async () => {
 const viewComments = async (postId: number, title: string = '') => {
   currentVideoTitle.value = stripHtml(title)
   selectedComments.value = []
+  commentCurrentPage.value = 1
   try {
     const { data } = await http.get('/api/collect/comments', { params: { post_id: postId } })
     commentList.value = data.items
@@ -463,6 +532,7 @@ const addToTouch = async () => {
 
 const viewXhsNotes = async (taskId: number) => {
   selectedXhsNotes.value = []
+  xhsNoteCurrentPage.value = 1
   try {
     const { data } = await http.get('/api/collect/xhs-notes', { params: { task_id: taskId } })
     xhsNoteList.value = data.items
@@ -551,6 +621,7 @@ const viewXhsComments = async (noteId: string, title: string = '') => {
   currentXhsNoteTitle.value = title || '(无标题)'
   currentXhsNoteId.value = noteId
   selectedXhsComments.value = []
+  xhsCommentCurrentPage.value = 1
   try {
     const { data } = await http.get('/api/collect/xhs-comments', { params: { note_id: noteId } })
     xhsCommentList.value = data.items

@@ -170,7 +170,12 @@ async def _create_xhs_client(cookie_str: str):
     headers = {**_XHS_HEADERS, "Cookie": cookie_str}
 
     pw = await async_playwright().start()
-    browser = await pw.chromium.launch(headless=True)
+    # 尝试使用系统 Chrome，避免下载 Chromium
+    try:
+        browser = await pw.chromium.launch(headless=True, channel="chrome")
+    except Exception as e:
+        logger.warning(f"无法使用系统 Chrome: {e}，尝试默认启动")
+        browser = await pw.chromium.launch(headless=True)
     context = await browser.new_context(
         user_agent=headers["User-Agent"],
     )

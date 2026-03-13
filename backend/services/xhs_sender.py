@@ -83,7 +83,12 @@ async def send_xhs_comment(
         payload["target_comment_id"] = target_comment_id
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
+        # 尝试使用系统 Chrome，避免下载 Chromium
+        try:
+            browser = await pw.chromium.launch(headless=True, channel="chrome")
+        except Exception as e:
+            logger.warning(f"无法使用系统 Chrome: {e}，尝试默认启动")
+            browser = await pw.chromium.launch(headless=True)
         context = await browser.new_context(user_agent=headers["User-Agent"])
 
         # 注入 stealth.js 防检测
@@ -172,7 +177,12 @@ async def check_xhs_cookie(cookie_str: str) -> Dict:
     uri = "/api/sns/web/v1/user/selfinfo"
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
+        # 尝试使用系统 Chrome，避免下载 Chromium
+        try:
+            browser = await pw.chromium.launch(headless=True, channel="chrome")
+        except Exception as e:
+            logger.warning(f"无法使用系统 Chrome: {e}，尝试默认启动")
+            browser = await pw.chromium.launch(headless=True)
         context = await browser.new_context(user_agent=headers["User-Agent"])
 
         if os.path.exists(_STEALTH_JS):

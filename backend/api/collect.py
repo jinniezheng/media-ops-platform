@@ -220,6 +220,8 @@ async def _do_collect(task: CollectTask, db: AsyncSession):
         account = result.scalar_one_or_none()
         if account and account.cookies:
             cookie_str = account.cookies
+        else:
+            raise ValueError(f"未找到可用的活跃小红书账号，请在账号管理中添加")
 
     return await crawler.collect(task, cookie_str=cookie_str)
 
@@ -243,6 +245,7 @@ async def _save_xhs_notes(db: AsyncSession, task, data: dict) -> dict:
             collected_count=n.get("collected_count", 0),
             comment_count=n.get("comment_count", 0),
             share_count=n.get("share_count", 0),
+            time=n.get("time", 0),
             note_url=f"https://www.xiaohongshu.com/explore/{n['note_id']}",
             xsec_token=n.get("xsec_token", ""),
             source_task_id=task.id,
@@ -361,9 +364,8 @@ async def list_xhs_notes(
     q = select(XhsNote).where(
         XhsNote.source_task_id == task_id
     ).order_by(
-        XhsNote.liked_count.desc(),
-        XhsNote.collected_count.desc(),
-        XhsNote.comment_count.desc(),
+        XhsNote.time.desc(),
+        XhsNote.created_at.desc(),
     )
     total_q = select(sa_func.count(XhsNote.id)).where(
         XhsNote.source_task_id == task_id
@@ -383,6 +385,7 @@ async def list_xhs_notes(
                 "collected_count": n.collected_count,
                 "comment_count": n.comment_count,
                 "share_count": n.share_count,
+                "time": n.time,
                 "note_url": n.note_url,
             }
             for n in notes

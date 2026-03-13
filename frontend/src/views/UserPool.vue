@@ -73,9 +73,10 @@
       </el-table>
       <el-pagination
         style="margin-top:16px;justify-content:flex-end"
-        layout="total, prev, pager, next"
-        :total="total"
-        :page-size="20"
+        background layout="total, sizes, prev, pager, next"
+        :total="total" :page-sizes="[10, 20, 50, 100]"
+        v-model:page-size="pageSize"
+        @size-change="() => { page = 1; loadUsers() }"
         @current-change="(p: number) => { page = p; loadUsers() }"
       />
     </el-card>
@@ -96,6 +97,7 @@ const statusMap: Record<string, string> = {
 const users = ref<any[]>([])
 const total = ref(0)
 const page = ref(1)
+const pageSize = ref(10)
 const keyword = ref('')
 const platformFilter = ref('')
 const selectedRows = ref<any[]>([])
@@ -105,7 +107,7 @@ const fetchLoading = ref(false)
 
 const loadUsers = async () => {
   try {
-    const params: any = { page: page.value, size: 20 }
+    const params: any = { page: page.value, size: pageSize.value }
     if (keyword.value) params.keyword = keyword.value
     if (platformFilter.value) params.platform = platformFilter.value
     const { data } = await http.get('/api/users', { params })

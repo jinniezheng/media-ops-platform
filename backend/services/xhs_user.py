@@ -87,7 +87,12 @@ async def get_xhs_user_info(
     cookie_dict = _parse_cookie_str(cookie_str)
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
+        # 尝试使用系统 Chrome，避免下载 Chromium
+        try:
+            browser = await pw.chromium.launch(headless=True, channel="chrome")
+        except Exception as e:
+            logger.warning(f"无法使用系统 Chrome: {e}，尝试默认启动")
+            browser = await pw.chromium.launch(headless=True)
         context = await browser.new_context(user_agent=_XHS_HEADERS["User-Agent"])
 
         # 注入 stealth.js 防检测

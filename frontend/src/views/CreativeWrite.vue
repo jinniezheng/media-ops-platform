@@ -70,14 +70,15 @@
         </el-table-column>
       </el-table>
       <el-pagination style="margin-top:12px;justify-content:flex-end" background
-        layout="total, prev, pager, next" :total="postTotal"
-        :page-size="pageSize" v-model:current-page="currentPage" @current-change="fetchPosts" />
+        layout="total, sizes, prev, pager, next" :total="postTotal"
+        :page-sizes="[10, 20, 50, 100]"
+        v-model:page-size="pageSize" v-model:current-page="currentPage" @current-change="fetchPosts" />
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import http from '../api/http'
 
@@ -94,8 +95,9 @@ const tagInputVal = ref('')
 const posts = ref<any[]>([])
 const postTotal = ref(0)
 const currentPage = ref(1)
-const pageSize = 20
+const pageSize = ref(10)
 const loadingPosts = ref(false)
+watch(pageSize, () => { currentPage.value = 1; fetchPosts() })
 const editingId = ref<number|null>(null)
 
 function addTag() {

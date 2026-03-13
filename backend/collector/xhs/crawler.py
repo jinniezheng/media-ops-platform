@@ -37,6 +37,14 @@ def _parse_cookie_str(cookie_str: str) -> dict:
     return result
 
 
+def _extract_note_time(note_id: str) -> int:
+    """XHS note_id 前 8 位是 Unix 秒时间戳（16进制），转为毫秒返回"""
+    try:
+        return int(note_id[:8], 16) * 1000
+    except (ValueError, IndexError):
+        return 0
+
+
 class XhsCrawler(AbstractCrawler):
     platform = "xhs"
 
@@ -52,7 +60,12 @@ class XhsCrawler(AbstractCrawler):
         headers = {**_XHS_HEADERS, "Cookie": cookie_str}
 
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True)
+            # 尝试使用系统 Chrome，避免下载 Chromium
+            try:
+                browser = await pw.chromium.launch(headless=True, channel="chrome")
+            except Exception as e:
+                logger.warning(f"无法使用系统 Chrome: {e}，尝试默认启动")
+                browser = await pw.chromium.launch(headless=True)
             context = await browser.new_context(user_agent=headers["User-Agent"])
             # 注入 stealth.js 防检测
             if os.path.exists(_STEALTH_JS):
@@ -64,7 +77,11 @@ class XhsCrawler(AbstractCrawler):
             ])
             page = await context.new_page()
             await page.goto("https://www.xiaohongshu.com/explore", wait_until="domcontentloaded")
-            await asyncio.sleep(2)
+            # 等待签名函数加载，最多 10s，避免固定 sleep
+            try:
+                await page.wait_for_function("typeof window.mnsv2 === 'function'", timeout=10000)
+            except Exception:
+                await asyncio.sleep(2)
 
             client = XhsApiClient(
                 headers=headers, playwright_page=page, cookie_dict=cookie_dict,
@@ -110,10 +127,11 @@ class XhsCrawler(AbstractCrawler):
                     "collected_count": int(interact.get("collected_count", "0")),
                     "comment_count": int(interact.get("comment_count", "0")),
                     "share_count": int(interact.get("share_count", "0")),
+                    "time": note_card.get("time") or _extract_note_time(note_id),
                     "xsec_token": xsec_token,
                 })
             page += 1
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
         return notes
 
     async def _fetch_all_comments(
@@ -125,7 +143,7 @@ class XhsCrawler(AbstractCrawler):
             xsec_token = note.get("xsec_token", "")
             try:
                 raw = await client.get_note_all_comments(
-                    note_id, xsec_token, max_count=20,
+                    note_id, xsec_token, max_count=20, crawl_interval=0.5,
                 )
                 for c in raw:
                     user_info = c.get("user_info", {})
@@ -144,5 +162,5 @@ class XhsCrawler(AbstractCrawler):
                     })
             except Exception as e:
                 logger.warning(f"获取笔记 {note_id} 评论失败: {e}")
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
         return comments
