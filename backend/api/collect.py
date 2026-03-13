@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func as sa_func, delete as sa_delete
 from database import get_db
-from models.task import CollectTask, VideoPost, PostComment, XhsNote, XhsComment, XhsVideo, XhsImage
+from models.task import CollectTask, VideoPost, PostComment, XhsNote, XhsComment, XhsVideo, XhsImage, DouyinPost, DouyinComment
 from models.user import CollectedUser
 from models.auth_user import AuthUser
 from services.auth import get_current_user
@@ -77,6 +77,8 @@ async def run_task(task_id: int, db: AsyncSession = Depends(get_db), current_use
         return await _save_video_comments(db, task, result)
     if task.platform == "xhs":
         return await _save_xhs_notes(db, task, result)
+    if task.platform == "douyin":
+        return await _save_douyin_posts(db, task, result)
     return await _save_users(db, task, result)
 
 
@@ -1157,3 +1159,151 @@ async def download_xhs_images(
     await db.commit()
     return {"downloaded": downloaded, "failed": failed}
 
+
+# ── 抖音视频采集 ─────────────────────────────────────────────
+
+async def _save_douyin_posts(db: AsyncSession, task: CollectTask, data: dict) -> dict:
+    """去重保存抖音视频和评论"""
+    posts = data.get("posts", [])
+    comments = data.get("comments", [])
+
+    post_count = 0
+    for p in posts:
+        aweme_id = p.get("aweme_id", "")
+        if not aweme_id:
+            continue
+        exists = await db.scalar(
+            select(DouyinPost.id).where(DouyinPost.aweme_id == aweme_id).limit(1)
+        )
+        if exists is not None:
+            continue
+        db.add(DouyinPost(
+            aweme_id=aweme_id,
+            desc=p.get("desc", ""),
+            author_uid=p.get("author_uid", ""),
+            author_name=p.get("author_name", ""),
+            author_avatar=p.get("author_avatar", ""),
+            like_count=p.get("like_count", 0),
+            comment_count=p.get("comment_count", 0),
+            share_count=p.get("share_count", 0),
+            collect_count=p.get("collect_count", 0),
+            play_count=p.get("play_count", 0),
+            duration=p.get("duration", 0),
+            cover_url=p.get("cover_url", ""),
+            video_url=p.get("video_url", ""),
+            create_time=p.get("create_time", 0),
+            source_task_id=task.id,
+        ))
+        post_count += 1
+
+    comment_count = 0
+    for c in comments:
+        comment_id = c.get("comment_id", "")
+        if not comment_id:
+            continue
+        exists = await db.scalar(
+            select(DouyinComment.id).where(
+                DouyinComment.comment_id == comment_id
+            ).limit(1)
+        )
+        if exists is not None:
+            continue
+        db.add(DouyinComment(
+            comment_id=comment_id,
+            aweme_id=c.get("aweme_id", ""),
+            content=c.get("content", ""),
+            user_id=c.get("user_id", ""),
+            nickname=c.get("nickname", ""),
+            avatar=c.get("avatar", ""),
+            ip_location=c.get("ip_location", ""),
+            like_count=c.get("like_count", 0),
+            reply_count=c.get("reply_count", 0),
+            create_time=c.get("create_time", 0),
+            source_task_id=task.id,
+        ))
+        comment_count += 1
+
+    task.collected_count = post_count
+    task.status = "done"
+    await db.commit()
+    return {"collected_posts": post_count, "collected_comments": comment_count}
+
+
+@router.get("/douyin-posts")
+async def list_douyin_posts(
+    task_id: int = Query(...),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    q = select(DouyinPost).where(
+        DouyinPost.source_task_id == task_id
+    ).order_by(DouyinPost.like_count.desc())
+    total_q = select(sa_func.count(DouyinPost.id)).where(
+        DouyinPost.source_task_id == task_id
+    )
+    total = await db.scalar(total_q) or 0
+    result = await db.execute(q.offset((page - 1) * size).limit(size))
+    posts = result.scalars().all()
+    return {
+        "total": total,
+        "items": [
+            {
+                "id": p.id,
+                "aweme_id": p.aweme_id,
+                "desc": p.desc,
+                "author_uid": p.author_uid,
+                "author_name": p.author_name,
+                "author_avatar": p.author_avatar,
+                "like_count": p.like_count,
+                "comment_count": p.comment_count,
+                "share_count": p.share_count,
+                "collect_count": p.collect_count,
+                "play_count": p.play_count,
+                "duration": p.duration,
+                "cover_url": p.cover_url,
+                "video_url": p.video_url,
+                "create_time": p.create_time,
+            }
+            for p in posts
+        ],
+    }
+
+
+@router.get("/douyin-comments")
+async def list_douyin_comments(
+    aweme_id: str = Query(...),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    q = select(DouyinComment).where(
+        DouyinComment.aweme_id == aweme_id
+    ).order_by(DouyinComment.like_count.desc())
+    total_q = select(sa_func.count(DouyinComment.id)).where(
+        DouyinComment.aweme_id == aweme_id
+    )
+    total = await db.scalar(total_q) or 0
+    result = await db.execute(q.offset((page - 1) * size).limit(size))
+    comments = result.scalars().all()
+    return {
+        "total": total,
+        "items": [
+            {
+                "id": c.id,
+                "comment_id": c.comment_id,
+                "aweme_id": c.aweme_id,
+                "content": c.content,
+                "user_id": c.user_id,
+                "nickname": c.nickname,
+                "avatar": c.avatar,
+                "ip_location": c.ip_location,
+                "like_count": c.like_count,
+                "reply_count": c.reply_count,
+                "create_time": c.create_time,
+            }
+            for c in comments
+        ],
+    }

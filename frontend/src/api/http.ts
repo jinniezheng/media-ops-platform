@@ -5,7 +5,7 @@ import axios from 'axios'
 const isDev = import.meta.env.DEV
 
 const http = axios.create({
-  baseURL: isDev ? `http://${window.location.hostname}:8000` : '',
+  baseURL: isDev ? 'http://localhost:8000' : '',
   timeout: 120000,
 })
 
