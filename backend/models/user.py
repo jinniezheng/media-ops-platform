@@ -22,6 +22,7 @@ class CollectedUser(Base):
     source_task_id = Column(Integer, index=True)
     source_note_id = Column(String(64))  # 来源笔记ID
     source_comment_id = Column(String(64))  # 来源评论ID
+    source_aweme_id = Column(String(64))  # 来源抖音视频ID
     tags = Column(String(256), default="")
     status = Column(String(20), default="new")  # new / contacted / converted
     created_at = Column(DateTime, server_default=func.now())

@@ -15,13 +15,18 @@ http.interceptors.request.use(config => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  console.log(`[HTTP Request] ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`, config.data ? { data: config.data } : '')
   return config
 })
 
 // 响应拦截器：401 自动跳转登录页
 http.interceptors.response.use(
-  response => response,
+  response => {
+    console.log(`[HTTP Response] ${response.status} ${response.config.url}`, response.data)
+    return response
+  },
   error => {
+    console.error('[HTTP Error]', error)
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
       localStorage.removeItem('user')

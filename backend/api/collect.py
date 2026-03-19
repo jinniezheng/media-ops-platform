@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func as sa_func, delete as sa_delete
@@ -9,6 +10,14 @@ from services.auth import get_current_user
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/collect", tags=["Collect"])
+
+# 采集任务超时配置（秒）
+COLLECT_TIMEOUT = {
+    "douyin": 300,  # 5分钟，优化后仍需要较长时间
+    "xhs": 300,     # 5分钟
+    "bilibili": 180, # 3分钟
+    "default": 300,  # 5分钟
+}
 
 
 class CollectTaskCreate(BaseModel):
@@ -65,8 +74,16 @@ async def run_task(task_id: int, db: AsyncSession = Depends(get_db), current_use
     task.error_message = ""
     await db.commit()
 
+    # 获取平台对应的超时时间
+    timeout_seconds = COLLECT_TIMEOUT.get(task.platform, COLLECT_TIMEOUT["default"])
+
     try:
-        result = await _do_collect(task, db)
+        result = await asyncio.wait_for(_do_collect(task, db), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        task.status = "failed"
+        task.error_message = f"采集超时（超过{timeout_seconds}秒）"
+        await db.commit()
+        return {"error": "采集任务执行超时", "collected": 0, "duplicates_skipped": 0}
     except Exception as exc:
         task.status = "failed"
         task.error_message = str(exc)[:500]
@@ -224,6 +241,20 @@ async def _do_collect(task: CollectTask, db: AsyncSession):
             cookie_str = account.cookies
         else:
             raise ValueError(f"未找到可用的活跃小红书账号，请在账号管理中添加")
+
+    if task.platform == "douyin":
+        result = await db.execute(
+            select(PlatformAccount).where(
+                PlatformAccount.platform == "douyin",
+                PlatformAccount.is_active == True,
+                PlatformAccount.owner_id == task.owner_id,
+            ).limit(1)
+        )
+        account = result.scalar_one_or_none()
+        if account and account.cookies:
+            cookie_str = account.cookies
+        else:
+            raise ValueError(f"未找到可用的活跃抖音账号，请在账号管理中添加")
 
     return await crawler.collect(task, cookie_str=cookie_str)
 
@@ -1239,7 +1270,7 @@ async def list_douyin_posts(
 ):
     q = select(DouyinPost).where(
         DouyinPost.source_task_id == task_id
-    ).order_by(DouyinPost.like_count.desc())
+    ).order_by(DouyinPost.create_time.desc())
     total_q = select(sa_func.count(DouyinPost.id)).where(
         DouyinPost.source_task_id == task_id
     )
@@ -1281,7 +1312,7 @@ async def list_douyin_comments(
 ):
     q = select(DouyinComment).where(
         DouyinComment.aweme_id == aweme_id
-    ).order_by(DouyinComment.like_count.desc())
+    ).order_by(DouyinComment.create_time.desc())
     total_q = select(sa_func.count(DouyinComment.id)).where(
         DouyinComment.aweme_id == aweme_id
     )
@@ -1307,3 +1338,124 @@ async def list_douyin_comments(
             for c in comments
         ],
     }
+
+
+@router.get("/douyin-post/{aweme_id}")
+async def get_douyin_post(
+    aweme_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """获取单个抖音视频详情"""
+    post = await db.scalar(
+        select(DouyinPost).where(DouyinPost.aweme_id == aweme_id).limit(1)
+    )
+    if not post:
+        return {"error": "视频未找到"}
+    return {
+        "id": post.id,
+        "aweme_id": post.aweme_id,
+        "desc": post.desc,
+        "author_uid": post.author_uid,
+        "author_name": post.author_name,
+        "author_avatar": post.author_avatar,
+        "like_count": post.like_count,
+        "comment_count": post.comment_count,
+        "share_count": post.share_count,
+        "collect_count": post.collect_count,
+        "play_count": post.play_count,
+        "duration": post.duration,
+        "cover_url": post.cover_url,
+        "video_url": post.video_url,
+        "create_time": post.create_time,
+        "source_task_id": post.source_task_id,
+    }
+
+
+@router.post("/douyin-extract-author/{aweme_id}")
+async def extract_douyin_author(
+    aweme_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """从抖音视频提取作者并保存到用户库"""
+    from models.user import CollectedUser
+
+    post = await db.scalar(
+        select(DouyinPost).where(DouyinPost.aweme_id == aweme_id).limit(1)
+    )
+    if not post:
+        return {"error": "视频未找到"}
+
+    if not post.author_uid:
+        return {"error": "视频无作者信息"}
+
+    # 检查是否已存在
+    exists = await db.scalar(
+        select(CollectedUser.id).where(
+            CollectedUser.platform == "douyin",
+            CollectedUser.platform_uid == post.author_uid,
+        ).limit(1)
+    )
+    if exists:
+        return {"added": 0, "skipped": 1, "message": "用户已存在"}
+
+    # 创建用户记录
+    user = CollectedUser(
+        platform="douyin",
+        platform_uid=post.author_uid,
+        nickname=post.author_name,
+        avatar_url=post.author_avatar,
+        source_task_id=post.source_task_id,
+        source_aweme_id=post.aweme_id,
+        status="new",
+    )
+    db.add(user)
+    await db.commit()
+
+    return {"added": 1, "skipped": 0, "user_id": user.id}
+
+
+class DouyinParseMediaBody(BaseModel):
+    """解析抖音视频媒体"""
+    account_id: int  # 用于重新获取高质量视频链接的账号
+
+
+@router.post("/douyin-parse-media/{aweme_id}")
+async def parse_douyin_media(
+    aweme_id: str,
+    body: DouyinParseMediaBody,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """解析抖音视频媒体资源（获取高质量视频链接）"""
+    from models.account import PlatformAccount
+    from collector.douyin.media import parse_douyin_video_media
+
+    # 获取账号
+    account = await db.get(PlatformAccount, body.account_id)
+    if not account or not account.cookies:
+        return {"error": "Account not found or no cookies"}
+    if account.platform != "douyin":
+        return {"error": "账号不是抖音平台"}
+
+    # 获取视频信息
+    post = await db.scalar(
+        select(DouyinPost).where(DouyinPost.aweme_id == aweme_id).limit(1)
+    )
+    if not post:
+        return {"error": "视频未找到"}
+
+    # 解析视频媒体
+    result = await parse_douyin_video_media(
+        cookie_str=account.cookies,
+        aweme_id=aweme_id,
+        video_url=post.video_url,  # 现有链接可能已过期
+    )
+
+    # 更新视频链接（如果获取到新的）
+    if result.get("success") and result.get("video_url"):
+        post.video_url = result["video_url"]
+        await db.commit()
+
+    return result

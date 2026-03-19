@@ -7,7 +7,7 @@
           <el-select v-model="selectedAccountId" placeholder="选择发送账号"
             style="width:200px" size="default">
             <el-option v-for="a in accounts" :key="a.id"
-              :label="`${a.account_name} (${a.platform === 'xhs' ? '小红书' : 'B站'})`" :value="a.id" />
+              :label="`${a.account_name} (${a.platform === 'xhs' ? '小红书' : a.platform === 'douyin' ? '抖音' : 'B站'})`" :value="a.id" />
           </el-select>
         </div>
       </template>
@@ -29,16 +29,16 @@
         <el-table-column type="selection" width="45" />
         <el-table-column label="平台" width="80">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.platform === 'xhs' ? 'danger' : ''">
-              {{ row.platform === 'xhs' ? '小红书' : 'B站' }}
+            <el-tag size="small" :type="row.platform === 'xhs' ? 'danger' : row.platform === 'douyin' ? 'success' : ''">
+              {{ row.platform === 'xhs' ? '小红书' : row.platform === 'douyin' ? '抖音' : 'B站' }}
             </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="类型" width="70">
           <template #default="{ row }">
             <el-tag size="small"
-              :type="row.target_message ? '' : 'warning'">
-              {{ row.target_message ? '回复' : '评论' }}
+              :type="row.platform === 'douyin' ? 'success' : row.target_message ? '' : 'warning'">
+              {{ row.platform === 'douyin' ? '视频' : row.target_message ? '回复' : '评论' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -49,6 +49,12 @@
               target="_blank" rel="noopener"
               style="color:#409eff;text-decoration:none">
               {{ row.target_note_title || '-' }}
+            </a>
+            <a v-else-if="row.platform === 'douyin' && row.target_aweme_id"
+              :href="`https://www.douyin.com/video/${row.target_aweme_id}`"
+              target="_blank" rel="noopener"
+              style="color:#409eff;text-decoration:none">
+              {{ row.target_message || row.video_title || '-' }}
             </a>
             <a v-else-if="row.target_aid"
               :href="`https://www.bilibili.com/video/av${row.target_aid}`"
@@ -62,7 +68,7 @@
         <el-table-column prop="target_message" label="原评论"
           min-width="150" show-overflow-tooltip>
           <template #default="{ row }">
-            {{ row.target_message || '(一级评论)' }}
+            {{ row.platform === 'douyin' ? '(视频)' : row.target_message || '(一级评论)' }}
           </template>
         </el-table-column>
         <el-table-column prop="target_uname" label="评论者" width="90" />
@@ -83,7 +89,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="140">
+        <el-table-column label="操作" width="180">
           <template #default="{ row }">
             <el-button v-if="row.status==='ai_generated'" size="small"
               type="success" @click="confirmReply(row)">确认</el-button>
@@ -91,6 +97,13 @@
               type="primary" @click="sendReply(row)"
               :disabled="!selectedAccountId" :loading="row._sending">
               发送</el-button>
+            <el-button v-if="row.status==='needs_verify'" size="small"
+              type="warning" @click="sendReply(row)"
+              :disabled="!selectedAccountId" :loading="row._sending">
+              重试</el-button>
+            <el-button v-if="['sent','failed'].includes(row.status)" size="small"
+              type="info" @click="resetToConfirmed(row)">
+              重新发送</el-button>
             <el-button size="small" type="danger" @click="deleteRecord(row)">
               删除</el-button>
           </template>
@@ -127,13 +140,14 @@ const batchLoading = ref(false)
 const batchSendLoading = ref(false)
 
 const confirmedSelectedCount = computed(() =>
-  selectedRows.value.filter((r: any) => r.status === 'confirmed').length
+  selectedRows.value.filter((r: any) => r.status === 'confirmed' || r.status === 'needs_verify').length
 )
 
 const statusLabel = (s: string) => {
   const m: Record<string, string> = {
     pending: '待生成', ai_generated: 'AI已生成',
     confirmed: '已确认', sent: '已发送', failed: '失败',
+    needs_verify: '待验证',
   }
   return m[s] || s
 }
@@ -141,6 +155,7 @@ const tagType = (s: string) => {
   if (s === 'sent') return 'success'
   if (s === 'failed') return 'danger'
   if (s === 'confirmed') return 'warning'
+  if (s === 'needs_verify') return 'warning'
   if (s === 'ai_generated') return ''
   return 'info'
 }
@@ -186,10 +201,10 @@ const batchGenerate = async () => {
 
 const batchSend = async () => {
   const confirmedIds = selectedRows.value
-    .filter((r: any) => r.status === 'confirmed')
+    .filter((r: any) => r.status === 'confirmed' || r.status === 'needs_verify')
     .map((r: any) => r.id)
   if (!confirmedIds.length) {
-    ElMessage.warning('选中的记录中没有已确认的'); return
+    ElMessage.warning('选中的记录中没有已确认或待验证的'); return
   }
   if (!selectedAccountId.value) {
     ElMessage.warning('请先选择发送账号'); return
@@ -219,6 +234,14 @@ const confirmReply = async (row: any) => {
     })
     row.status = 'confirmed'
   } catch { ElMessage.error('确认失败') }
+}
+
+const resetToConfirmed = async (row: any) => {
+  try {
+    await http.put(`/api/message/touch/${row.id}`, { status: 'confirmed' })
+    row.status = 'confirmed'
+    ElMessage.success('已重置为已确认，可重新发送')
+  } catch { ElMessage.error('重置失败') }
 }
 
 const sendReply = async (row: any) => {

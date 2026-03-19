@@ -41,6 +41,8 @@ class TouchRecord(Base):
     platform = Column(String(20), default="bilibili")  # bilibili / xhs
     target_note_id = Column(String(64), default="")     # XHS 笔记ID
     target_note_title = Column(String(512), default="")  # 笔记标题（XHS 用）
+    # 抖音扩展字段
+    target_aweme_id = Column(String(64), default="")    # 抖音视频ID
     # pending → ai_generated → confirmed → sent / failed
     status = Column(String(20), default="pending")
     sent_at = Column(DateTime)

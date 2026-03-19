@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from services.llm import generate_comment_reply, generate_xhs_reply
 from services.bilibili_sender import send_reply_comment
 from services.xhs_sender import send_xhs_comment
+from services.douyin_sender import send_douyin_comment
 from datetime import datetime
 import logging
 
@@ -84,11 +85,28 @@ class XhsCommentItem(BaseModel):
     content: str
 
 
+class DouyinVideoItem(BaseModel):
+    aweme_id: str
+    desc: str
+    author_name: str
+    author_uid: str
+
+
+class DouyinCommentItem(BaseModel):
+    comment_id: str
+    aweme_id: str
+    content: str
+    nickname: str
+    user_id: str
+
+
 class TouchCreateFromComments(BaseModel):
     comments: list[CommentItem] = []
     videos: list[VideoItem] = []
     xhs_notes: list[XhsNoteItem] = []
     xhs_comments: list[XhsCommentItem] = []
+    douyin_videos: list[DouyinVideoItem] = []
+    douyin_comments: list[DouyinCommentItem] = []
 
 
 @router.post("/touch")
@@ -139,6 +157,29 @@ async def create_touch(
             platform="xhs",
             target_note_id=c.note_id,
             target_note_title=c.note_title,
+            target_message=c.content,
+            target_uname=c.nickname,
+            status="pending",
+        )
+        db.add(rec)
+        created += 1
+    for v in body.douyin_videos:
+        rec = TouchRecord(
+            touch_type="comment",
+            platform="douyin",
+            target_aweme_id=v.aweme_id,
+            target_message=v.desc,
+            target_uname=v.author_name,
+            video_title=v.desc[:100],  # 使用描述作为标题
+            status="pending",
+        )
+        db.add(rec)
+        created += 1
+    for c in body.douyin_comments:
+        rec = TouchRecord(
+            touch_type="comment",
+            platform="douyin",
+            target_aweme_id=c.aweme_id,
             target_message=c.content,
             target_uname=c.nickname,
             status="pending",
@@ -312,6 +353,30 @@ async def send_touch(
             else:
                 rec.status = "failed"
                 rec.content = resp.get("msg", str(resp))[:500]
+        elif rec_platform == "douyin":
+            # 抖音发送
+            if not rec.target_aweme_id:
+                rec.status = "failed"
+                rec.content = "抖音视频ID缺失"
+                return {"error": "抖音视频ID缺失"}
+
+            resp = await send_douyin_comment(
+                cookie_str=account.cookies,
+                aweme_id=rec.target_aweme_id,
+                content=rec.final_reply,
+                target_comment_id="",  # 暂不支持回复评论
+            )
+            if resp.get("success") or resp.get("code") == 0:
+                rec.status = "sent"
+                rec.account_id = account.id
+                rec.sent_at = datetime.now()
+                account.used_today += 1
+            elif resp.get("needs_verify"):
+                rec.status = "needs_verify"
+                rec.content = resp.get("message", str(resp))[:500]
+            else:
+                rec.status = "failed"
+                rec.content = resp.get("message", str(resp))[:500]
         else:
             # B站发送
             resp = await send_reply_comment(
@@ -356,7 +421,7 @@ async def batch_send(
     if not current_account or not current_account.cookies or current_account.owner_id != current_user.id:
         return {"error": "Account not found or no cookies"}
 
-    platform = current_account.platform  # bilibili 或 xhs
+    platform = current_account.platform  # bilibili, xhs 或 douyin
 
     # 获取该平台所有可用账号
     all_accounts_result = await db.execute(
@@ -373,7 +438,7 @@ async def batch_send(
 
     q = select(TouchRecord).where(
         TouchRecord.id.in_(body.record_ids),
-        TouchRecord.status == "confirmed",
+        TouchRecord.status.in_(["confirmed", "needs_verify"]),
     )
     result = await db.execute(q)
     records = result.scalars().all()
@@ -428,6 +493,34 @@ async def batch_send(
                     rec.status = "failed"
                     rec.content = resp.get("msg", str(resp))[:500]
                     failed += 1
+            elif platform == "douyin":
+                # 抖音发送
+                if not rec.target_aweme_id:
+                    rec.status = "failed"
+                    rec.content = "抖音视频ID缺失"
+                    failed += 1
+                    continue
+
+                resp = await send_douyin_comment(
+                    cookie_str=current_account.cookies,
+                    aweme_id=rec.target_aweme_id,
+                    content=rec.final_reply,
+                    target_comment_id="",  # 暂不支持回复评论
+                )
+                if resp.get("success") or resp.get("code") == 0:
+                    rec.status = "sent"
+                    rec.account_id = current_account.id
+                    rec.sent_at = datetime.now()
+                    current_account.used_today += 1
+                    sent += 1
+                elif resp.get("needs_verify"):
+                    rec.status = "needs_verify"
+                    rec.content = resp.get("message", str(resp))[:500]
+                    failed += 1
+                else:
+                    rec.status = "failed"
+                    rec.content = resp.get("message", str(resp))[:500]
+                    failed += 1
             else:
                 # B站发送
                 resp = await send_reply_comment(
@@ -478,6 +571,7 @@ async def list_records(db: AsyncSession = Depends(get_db), current_user: AuthUse
                 "target_message": r.target_message,
                 "target_uname": r.target_uname,
                 "video_title": r.video_title,
+                "target_aweme_id": r.target_aweme_id or "",
                 "target_note_id": r.target_note_id or "",
                 "target_note_title": r.target_note_title or "",
                 "ai_reply": r.ai_reply,

@@ -47,7 +47,12 @@ async def check_douyin_cookie(cookie_str: str) -> Dict:
     detected = asyncio.Event()
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
+        # 尝试使用系统 Chrome，避免下载 Chromium
+        try:
+            browser = await pw.chromium.launch(headless=True, channel="chrome")
+        except Exception as e:
+            logger.warning(f"无法使用系统 Chrome: {e}，尝试默认启动")
+            browser = await pw.chromium.launch(headless=True)
         context = await browser.new_context(
             user_agent=_UA,
             viewport={"width": 1280, "height": 800},
