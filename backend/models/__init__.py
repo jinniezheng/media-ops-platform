@@ -4,7 +4,6 @@ from models.account import PlatformAccount
 from models.template import MessageTemplate
 from models.creative import CreativePost
 from models.auth_user import AuthUser
-from models.douyin import DouyinVideo, DouyinComment
 
 __all__ = [
     "CollectedUser",
@@ -20,6 +19,4 @@ __all__ = [
     "MessageTemplate",
     "CreativePost",
     "AuthUser",
-    "DouyinVideo",
-    "DouyinComment",
 ]
