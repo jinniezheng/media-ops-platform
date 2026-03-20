@@ -217,6 +217,11 @@ async def send_douyin_comment(
             logger.info(f"[Douyin] 页面标题: {title}")
             logger.info(f"[Douyin] 当前URL: {current_url}")
 
+            # 检查页面类型
+            is_video_page = "/video/" in current_url
+            is_note_page = "/note/" in current_url
+            logger.info(f"[Douyin] 页面类型检测: is_video_page={is_video_page}, is_note_page={is_note_page}")
+
             # ── 页面加载后立刻截图（调试用）+ 打印右侧评论相关元素 ───────────
             # await full_screenshot(f"douyin_loaded_{aweme_id}.png")
             try:
@@ -261,7 +266,7 @@ async def send_douyin_comment(
                                     const r = el.getBoundingClientRect();
                                     if (r.width > 30) {{
                                         el.scrollIntoView({{block:'center'}});
-                                        return {{x: r.x + r.width*0.25, y: r.y + r.height*0.5,
+                                        return {{x: r.x + r.width*0.5, y: r.y + r.height*0.5,
                                                 w: r.width, h: r.height}};
                                     }}
                                 }}
@@ -290,9 +295,9 @@ async def send_douyin_comment(
                                 else:
                                     await asyncio.sleep(0.5)
 
-                            # 如果两次检查都失败，仍然返回True（让上层处理）
-                            logger.warning(f"[Douyin] 点击占位符后未能确认激活输入框")
-                            return True
+                            # 如果两次检查都失败，返回False让上层重试
+                            logger.warning(f"[Douyin] 点击占位符后未能确认激活输入框，返回False重试")
+                            return False
                     except Exception as e:
                         logger.debug(f"[Douyin] JS点击占位符 '{text}' 失败: {e}")
                 return False
@@ -304,19 +309,63 @@ async def send_douyin_comment(
                 for text in placeholder_texts:
                     try:
                         locator = page.get_by_text(text, exact=True)
-                        if await locator.count() > 0 and await locator.first.is_visible():
+                        if await locator.count() > 0:
                             # 先滚动到元素，确保坐标在视口范围内
-                            await locator.first.scroll_into_view_if_needed()
-                            await asyncio.sleep(0.3)
+                            await locator.first.scroll_into_view_if_needed(timeout=2000)
+                            await asyncio.sleep(0.5)
                             bbox = await locator.first.bounding_box()
                             if bbox and bbox["width"] > 30:
-                                cx = bbox["x"] + bbox["width"] * 0.25
+                                cx = bbox["x"] + bbox["width"] * 0.5
                                 cy = bbox["y"] + bbox["height"] * 0.5
-                                await page.mouse.click(cx, cy)
-                                placeholder_clicked = True
-                                await asyncio.sleep(1.5)
-                                logger.info(f"[Douyin] 已激活评论输入框: '{text}' (click at {cx:.0f},{cy:.0f})")
-                                break
+
+                                # 根据页面类型选择点击策略
+                                if is_video_page:
+                                    # 视频页面：尝试多种点击方式
+                                    click_methods = [
+                                        ("single_click", lambda: page.mouse.click(cx, cy)),
+                                        ("double_click", lambda: page.mouse.dblclick(cx, cy)),
+                                        ("js_click", lambda: locator.first.click()),
+                                        ("focus_then_click", lambda: page.evaluate(f"""(cx, cy) => {{
+                                            const elem = document.elementFromPoint(cx, cy);
+                                            if (elem) {{
+                                                elem.focus();
+                                                elem.click();
+                                            }}
+                                        }}""", cx, cy))
+                                    ]
+
+                                    for method_name, click_func in click_methods:
+                                        try:
+                                            logger.info(f"[Douyin] 尝试点击方式: {method_name} at ({cx:.0f},{cy:.0f})")
+                                            await click_func()
+                                            await asyncio.sleep(0.5)
+
+                                            # 检查是否激活
+                                            ce_elem = await page.query_selector('div[contenteditable="true"]')
+                                            if ce_elem and await ce_elem.is_visible():
+                                                placeholder_clicked = True
+                                                logger.info(f"[Douyin] {method_name} 成功激活输入框")
+                                                break
+                                            else:
+                                                logger.info(f"[Douyin] {method_name} 未激活输入框，尝试下一种方式")
+                                        except Exception as method_e:
+                                            logger.debug(f"[Douyin] 点击方式 {method_name} 失败: {method_e}")
+
+                                    if not placeholder_clicked:
+                                        # 如果所有方式都失败，使用默认单击并标记为已点击
+                                        await page.mouse.click(cx, cy)
+                                        placeholder_clicked = True
+                                        await asyncio.sleep(2.0)
+                                        logger.info(f"[Douyin] 使用默认单击 at ({cx:.0f},{cy:.0f})，但未确认激活")
+                                else:
+                                    # 笔记页或未知页面：使用原单击方式
+                                    await page.mouse.click(cx, cy)
+                                    placeholder_clicked = True
+                                    await asyncio.sleep(1.5)
+                                    logger.info(f"[Douyin] 已激活评论输入框: '{text}' (click at {cx:.0f},{cy:.0f})")
+
+                                if placeholder_clicked:
+                                    break
                     except Exception as e:
                         logger.debug(f"[Douyin] 找不到占位符 '{text}': {e}")
 
@@ -342,7 +391,7 @@ async def send_douyin_comment(
                                     await asyncio.sleep(0.3)
                                     bbox = await placeholder_elem.bounding_box()
                                     if bbox and bbox["width"] > 30:
-                                        cx = bbox["x"] + bbox["width"] * 0.25
+                                        cx = bbox["x"] + bbox["width"] * 0.5
                                         cy = bbox["y"] + bbox["height"] * 0.5
                                         await page.mouse.click(cx, cy)
                                         placeholder_clicked = True
@@ -374,7 +423,7 @@ async def send_douyin_comment(
                                         # 选择x坐标最大的（最靠右侧）
                                         elem_to_click = max(elems_with_pos, key=lambda x: x[1])[0]
                                         bbox = await elem_to_click.bounding_box()
-                                        cx = bbox["x"] + bbox["width"] * 0.25
+                                        cx = bbox["x"] + bbox["width"] * 0.5
                                         cy = bbox["y"] + bbox["height"] * 0.5
                                         await page.mouse.click(cx, cy)
                                         placeholder_clicked = True
@@ -402,7 +451,7 @@ async def send_douyin_comment(
                             await asyncio.sleep(0.3)
                             bbox = await elem.bounding_box()
                             if bbox and bbox["width"] > 30:
-                                cx = bbox["x"] + bbox["width"] * 0.25
+                                cx = bbox["x"] + bbox["width"] * 0.5
                                 cy = bbox["y"] + bbox["height"] * 0.5
                                 await page.mouse.click(cx, cy)
                                 placeholder_clicked = True
@@ -560,7 +609,7 @@ async def send_douyin_comment(
                                 if bb and bb["width"] > 30:
                                     await ce.scroll_into_view_if_needed()
                                     await asyncio.sleep(0.3)
-                                    await page.mouse.click(bb["x"] + bb["width"] * 0.25, bb["y"] + bb["height"] * 0.5)
+                                    await page.mouse.click(bb["x"] + bb["width"] * 0.5, bb["y"] + bb["height"] * 0.5)
                                     placeholder_clicked = True
                                     await asyncio.sleep(1.5)
                                     logger.info(f"[Douyin] 直接点击 contenteditable 成功")
@@ -586,7 +635,7 @@ async def send_douyin_comment(
                                                 const r = el.getBoundingClientRect();
                                                 if (r.width > 30) {{
                                                     el.scrollIntoView({{block:'center'}});
-                                                    return {{x: r.x + r.width*0.25, y: r.y + r.height*0.5,
+                                                    return {{x: r.x + r.width*0.5, y: r.y + r.height*0.5,
                                                             w: r.width, h: r.height}};
                                                 }}
                                             }}
@@ -628,7 +677,7 @@ async def send_douyin_comment(
                                             # 选择x坐标最大的（最靠右侧）
                                             elem_to_click = max(elems_with_pos, key=lambda x: x[1])[0]
                                             bbox = await elem_to_click.bounding_box()
-                                            cx = bbox["x"] + bbox["width"] * 0.25
+                                            cx = bbox["x"] + bbox["width"] * 0.5
                                             cy = bbox["y"] + bbox["height"] * 0.5
                                             await page.mouse.click(cx, cy)
                                             placeholder_clicked = True
@@ -650,7 +699,7 @@ async def send_douyin_comment(
                                     await asyncio.sleep(0.5)
                                     bbox = await locator.first.bounding_box()
                                     if bbox and bbox["width"] > 30:
-                                        cx = bbox["x"] + bbox["width"] * 0.25
+                                        cx = bbox["x"] + bbox["width"] * 0.5
                                         cy = bbox["y"] + bbox["height"] * 0.5
                                         await page.mouse.click(cx, cy)
                                         placeholder_clicked = True
@@ -733,7 +782,7 @@ async def send_douyin_comment(
                     await asyncio.sleep(0.3)
                     ce_bbox = await ce_div.bounding_box()
                     if ce_bbox and ce_bbox["width"] > 30:
-                        cx = ce_bbox["x"] + ce_bbox["width"] * 0.25
+                        cx = ce_bbox["x"] + ce_bbox["width"] * 0.5
                         cy = ce_bbox["y"] + ce_bbox["height"] * 0.5
                         await page.mouse.click(cx, cy)
                         await asyncio.sleep(0.5)
