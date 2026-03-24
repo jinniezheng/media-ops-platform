@@ -8,7 +8,12 @@ from playwright.async_api import Page
 logger = logging.getLogger(__name__)
 
 # 抖音 API 路径特征
-_SEARCH_API_PATTERN = "/aweme/v1/web/search/item/"
+# 搜索API可能有多个版本
+_SEARCH_API_PATTERNS = [
+    "/aweme/v1/web/general/search/single/",  # 新的搜索API
+    "/aweme/v1/web/search/item/",           # 旧的搜索API
+    "/aweme/v1/web/search/"                 # 通用匹配
+]
 _COMMENT_API_PATTERN = "/aweme/v1/web/comment/list/"
 
 
@@ -98,7 +103,8 @@ class DouyinApiClient:
 
         async def on_response(resp):
             nonlocal no_more
-            if _SEARCH_API_PATTERN not in resp.url:
+            # 检查是否匹配任何搜索API模式
+            if not any(pattern in resp.url for pattern in _SEARCH_API_PATTERNS):
                 return
             try:
                 data = await resp.json()
@@ -145,11 +151,96 @@ class DouyinApiClient:
 
         self.page.on("response", on_response)
         try:
-            search_url = f"https://www.douyin.com/search/{keyword}?type=video"
+            # 先访问抖音首页建立正常会话
+            logger.info(f"[Douyin] 先访问抖音首页建立会话...")
+            await self.page.goto("https://www.douyin.com", wait_until="domcontentloaded", timeout=15000)
+            await asyncio.sleep(2)
+
+            # 关闭首页的登录modal
+            try:
+                cancel_btn = self.page.get_by_text("取消", exact=True)
+                if await cancel_btn.count() > 0:
+                    await cancel_btn.click()
+                    logger.info(f"[Douyin] 已关闭首页登录modal")
+                    await asyncio.sleep(1)
+                else:
+                    await self.page.keyboard.press("Escape")
+                    await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.debug(f"[Douyin] 关闭首页modal失败: {e}")
+
+            # 等待一下让会话建立
+            await asyncio.sleep(2)
+
+            # 模拟用户搜索：在首页搜索框输入关键词
+            logger.info(f"[Douyin] 在首页查找搜索框...")
+            # 多种选择器尝试
+            search_selectors = [
+                'input[placeholder*="搜索"]',
+                'input[type="search"]',
+                '[data-e2e="search-input"]',
+                'input.search-input',
+                '.search-input input',
+                'input[class*="search"]'
+            ]
+
+            search_input = None
+            for selector in search_selectors:
+                try:
+                    search_input = await self.page.wait_for_selector(selector, timeout=5000)
+                    if search_input:
+                        logger.info(f"[Douyin] 找到搜索框: {selector}")
+                        break
+                except Exception:
+                    logger.debug(f"[Douyin] 未找到搜索框选择器: {selector}")
+
             page_load_start = time.time()
-            await self.page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
+            if not search_input:
+                # 回退到直接访问搜索URL
+                logger.info(f"[Douyin] 未找到搜索框，回退到直接搜索URL")
+                search_url = f"https://www.douyin.com/jingxuan/search/{keyword}?type=general"
+                logger.info(f"[Douyin] 访问搜索页: {search_url}")
+                await self.page.goto(search_url, wait_until="domcontentloaded", timeout=15000)
+            else:
+                # 在搜索框输入关键词并搜索
+                logger.info(f"[Douyin] 输入搜索关键词: {keyword}")
+                await search_input.fill(keyword)
+                await search_input.press("Enter")
+                await asyncio.sleep(2)
+
+                current_url = self.page.url
+                logger.info(f"[Douyin] 搜索后URL: {current_url}")
+
             page_load_time = time.time() - page_load_start
-            await asyncio.sleep(1.5)
+
+            # 关闭可能的登录modal
+            await asyncio.sleep(2)
+            try:
+                # 尝试查找"取消"按钮并点击
+                cancel_btn = self.page.get_by_text("取消", exact=True)
+                if await cancel_btn.count() > 0:
+                    await cancel_btn.click()
+                    logger.info(f"[Douyin] 已关闭登录modal")
+                    await asyncio.sleep(1)
+                # 如果找不到"取消"，尝试按ESC
+                else:
+                    await self.page.keyboard.press("Escape")
+                    await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.debug(f"[Douyin] 关闭modal失败或无modal: {e}")
+
+            # 再次检查标题，因为关闭modal后页面可能变化
+            await asyncio.sleep(1)
+            title = await self.page.title()
+            # 检查是否遇到验证码页面
+            if "验证" in title:
+                logger.warning(f"[Douyin] 遇到验证码页面，标题: {title}")
+                # 保存页面内容用于调试
+                content = await self.page.content()
+                if len(content) < 10000:
+                    logger.warning(f"[Douyin] 验证码页面内容过短，可能被重定向")
+                return posts[:max_count]
+
             logger.info(f"[Douyin] 页面加载完成: 耗时={page_load_time:.2f}秒")
 
             collected.set()  # 允许首轮立即检查
@@ -228,7 +319,35 @@ class DouyinApiClient:
             page_load_start = time.time()
             await self.page.goto(video_url, wait_until="domcontentloaded", timeout=15000)
             page_load_time = time.time() - page_load_start
-            await asyncio.sleep(1.5)
+
+            # 关闭可能的登录modal
+            await asyncio.sleep(2)
+            try:
+                # 尝试查找"取消"按钮并点击
+                cancel_btn = self.page.get_by_text("取消", exact=True)
+                if await cancel_btn.count() > 0:
+                    await cancel_btn.click()
+                    logger.info(f"[Douyin] 已关闭登录modal")
+                    await asyncio.sleep(1)
+                # 如果找不到"取消"，尝试按ESC
+                else:
+                    await self.page.keyboard.press("Escape")
+                    await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.debug(f"[Douyin] 关闭modal失败或无modal: {e}")
+
+            # 再次检查标题，因为关闭modal后页面可能变化
+            await asyncio.sleep(1)
+            title = await self.page.title()
+            # 检查是否遇到验证码页面
+            if "验证" in title:
+                logger.warning(f"[Douyin] 遇到验证码页面，标题: {title}")
+                # 保存页面内容用于调试
+                content = await self.page.content()
+                if len(content) < 10000:
+                    logger.warning(f"[Douyin] 验证码页面内容过短，可能被重定向")
+                return comments[:max_count]
+
             logger.info(f"[Douyin] 视频页面加载完成: aweme_id={aweme_id}, 耗时={page_load_time:.2f}秒")
 
             scroll_attempts = 0

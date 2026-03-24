@@ -15,12 +15,7 @@ _STEALTH_JS = os.path.join(
     os.path.dirname(__file__), "..", "..", "libs", "stealth.min.js"
 )
 
-_DOUYIN_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-    ),
-}
+# User-Agent已直接使用更新后的版本
 
 # 每个视频最多采集评论数
 _COMMENTS_PER_VIDEO = 10
@@ -79,21 +74,24 @@ class DouyinCrawler(AbstractCrawler):
                         '--disable-blink-features=AutomationControlled',
                     ]
                 )
-            # 恢复标准viewport大小，确保抖音页面正常显示
+            # 使用更大的viewport，类似真实浏览器
             context = await browser.new_context(
-                user_agent=_DOUYIN_HEADERS["User-Agent"],
-                viewport={"width": 1280, "height": 800},  # 恢复标准大小
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",  # 更新User-Agent
+                viewport={"width": 1920, "height": 1080},  # 更大的viewport
                 java_script_enabled=True,
                 bypass_csp=True,
                 ignore_https_errors=True,
-                # 减少内存使用
                 device_scale_factor=1,
                 is_mobile=False,
                 has_touch=False,
-                # 禁用不必要的资源
                 accept_downloads=False,
-                # 优化网络设置
-                extra_http_headers={},
+                locale="zh-CN",  # 设置语言
+                timezone_id="Asia/Shanghai",  # 设置时区
+                extra_http_headers={
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                    "Accept-Encoding": "gzip, deflate, br",
+                },
             )
 
             # 注入 stealth.js 防检测
