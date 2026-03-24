@@ -3,7 +3,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func as sa_func, delete as sa_delete
 from database import get_db
 from models.task import CollectTask, VideoPost, PostComment, XhsNote, XhsComment, XhsVideo, XhsImage
-from models.douyin import DouyinVideo, DouyinComment
 from models.user import CollectedUser
 from models.auth_user import AuthUser
 from services.auth import get_current_user
@@ -88,8 +87,6 @@ async def run_task(task_id: int, db: AsyncSession = Depends(get_db), current_use
         return await _save_video_comments(db, task, result)
     if task.platform == "xhs":
         return await _save_xhs_notes(db, task, result)
-    if task.platform == "douyin":
-        return await _save_douyin_videos(db, task, result)
     return await _save_users(db, task, result)
 
 
@@ -118,13 +115,6 @@ async def delete_task(task_id: int, db: AsyncSession = Depends(get_db), current_
     )
     await db.execute(
         sa_delete(XhsNote).where(XhsNote.source_task_id == task_id)
-    )
-    # 删除关联的抖音数据
-    await db.execute(
-        sa_delete(DouyinComment).where(DouyinComment.source_task_id == task_id)
-    )
-    await db.execute(
-        sa_delete(DouyinVideo).where(DouyinVideo.source_task_id == task_id)
     )
     await db.delete(task)
     await db.commit()
@@ -233,7 +223,7 @@ async def _do_collect(task: CollectTask, db: AsyncSession):
 
     # 从数据库获取对应平台的活跃账号 cookie（按 owner_id 过滤）
     cookie_str = ""
-    if task.platform in ("xhs", "douyin"):
+    if task.platform == "xhs":
         result = await db.execute(
             select(PlatformAccount).where(
                 PlatformAccount.platform == task.platform,
@@ -309,59 +299,6 @@ async def _save_xhs_notes(db: AsyncSession, task, data: dict) -> dict:
     return {"collected_notes": note_count, "collected_comments": comment_count, "note_duplicates": note_dup}
 
 
-async def _save_douyin_videos(db: AsyncSession, task, data: dict) -> dict:
-    videos = data.get("videos", [])
-    comments = data.get("comments", [])
-    video_count = 0
-    for v in videos:
-        exists = await db.execute(
-            select(DouyinVideo.id).where(
-                DouyinVideo.aweme_id == v["aweme_id"]
-            ).limit(1)
-        )
-        if exists.scalar() is not None:
-            continue
-        db.add(DouyinVideo(
-            aweme_id=v["aweme_id"], desc=v.get("desc", ""),
-            author_uid=v.get("author_uid", ""),
-            author_nickname=v.get("author_nickname", ""),
-            author_avatar=v.get("author_avatar", ""),
-            digg_count=v.get("digg_count", 0),
-            comment_count=v.get("comment_count", 0),
-            share_count=v.get("share_count", 0),
-            play_count=v.get("play_count", 0),
-            create_time=v.get("create_time", 0),
-            source_task_id=task.id,
-        ))
-        video_count += 1
-    comment_count = 0
-    for c in comments:
-        exists = await db.execute(
-            select(DouyinComment.id).where(
-                DouyinComment.cid == c["cid"]
-            ).limit(1)
-        )
-        if exists.scalar() is not None:
-            continue
-        db.add(DouyinComment(
-            cid=c["cid"], aweme_id=c.get("aweme_id", ""),
-            text=c.get("text", ""), user_id=c.get("user_id", ""),
-            nickname=c.get("nickname", ""),
-            avatar=c.get("avatar", ""),
-            digg_count=c.get("digg_count", 0),
-            reply_comment_total=c.get("reply_comment_total", 0),
-            create_time=c.get("create_time", 0),
-            ip_location=c.get("ip_location", ""),
-            source_task_id=task.id,
-        ))
-        comment_count += 1
-    task.collected_count = video_count
-    task.status = "done"
-    await db.commit()
-    return {
-        "collected_videos": video_count,
-        "collected_comments": comment_count,
-    }
 
 
 # ── Video / Comment query endpoints ─────────────────────────
@@ -1250,138 +1187,9 @@ async def download_xhs_images(
 
 # ── 抖音视频/评论查询 ──────────────────────────────────────────
 
-@router.get("/douyin-videos")
-async def list_douyin_videos(
-    task_id: int = Query(...),
-    page: int = Query(1, ge=1),
-    size: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-    current_user: AuthUser = Depends(get_current_user),
-):
-    q = select(DouyinVideo).where(
-        DouyinVideo.source_task_id == task_id
-    ).order_by(
-        DouyinVideo.play_count.desc(),
-        DouyinVideo.digg_count.desc(),
-        DouyinVideo.comment_count.desc(),
-        DouyinVideo.share_count.desc(),
-    )
-    total_q = select(sa_func.count(DouyinVideo.id)).where(
-        DouyinVideo.source_task_id == task_id
-    )
-    total = await db.scalar(total_q) or 0
-    result = await db.execute(q.offset((page - 1) * size).limit(size))
-    videos = result.scalars().all()
-    return {
-        "total": total,
-        "items": [
-            {
-                "id": v.id,
-                "aweme_id": v.aweme_id,
-                "desc": v.desc,
-                "author_uid": v.author_uid,
-                "author_nickname": v.author_nickname,
-                "author_avatar": v.author_avatar,
-                "digg_count": v.digg_count,
-                "comment_count": v.comment_count,
-                "share_count": v.share_count,
-                "play_count": v.play_count,
-                "create_time": v.create_time,
-            }
-            for v in videos
-        ],
-    }
 
 
-@router.get("/douyin-comments")
-async def list_douyin_comments(
-    aweme_id: str = Query(...),
-    page: int = Query(1, ge=1),
-    size: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-    current_user: AuthUser = Depends(get_current_user),
-):
-    q = select(DouyinComment).where(
-        DouyinComment.aweme_id == aweme_id,
-    ).order_by(DouyinComment.digg_count.desc())
-    total_q = select(sa_func.count(DouyinComment.id)).where(
-        DouyinComment.aweme_id == aweme_id,
-    )
-    total = await db.scalar(total_q) or 0
-    result = await db.execute(q.offset((page - 1) * size).limit(size))
-    comments = result.scalars().all()
-    return {
-        "total": total,
-        "items": [
-            {
-                "id": c.id,
-                "cid": c.cid,
-                "aweme_id": c.aweme_id,
-                "text": c.text,
-                "user_id": c.user_id,
-                "nickname": c.nickname,
-                "avatar": c.avatar,
-                "digg_count": c.digg_count,
-                "reply_comment_total": c.reply_comment_total,
-                "create_time": c.create_time,
-                "ip_location": c.ip_location,
-            }
-            for c in comments
-        ],
-    }
 
 
 # ── 抖音提取作者 ──────────────────────────────────────────────
 
-class DouyinExtractAuthorsBody(BaseModel):
-    aweme_ids: list[str]
-
-
-@router.post("/douyin-extract-authors")
-async def extract_douyin_authors(
-    body: DouyinExtractAuthorsBody,
-    db: AsyncSession = Depends(get_db),
-    current_user: AuthUser = Depends(get_current_user),
-):
-    from models.user import CollectedUser
-
-    q = select(DouyinVideo).where(
-        DouyinVideo.aweme_id.in_(body.aweme_ids)
-    )
-    result = await db.execute(q)
-    videos = result.scalars().all()
-
-    added = 0
-    skipped = 0
-    updated = 0
-    for v in videos:
-        if not v.author_uid:
-            continue
-        exists_id = await db.scalar(
-            select(CollectedUser.id).where(
-                CollectedUser.platform == "douyin",
-                CollectedUser.platform_uid == v.author_uid,
-                CollectedUser.owner_id == current_user.id,
-            ).limit(1)
-        )
-        if exists_id:
-            skipped += 1
-            existing_user = await db.get(CollectedUser, exists_id)
-            if existing_user and not (existing_user.source_note_id or ""):
-                existing_user.source_note_id = v.aweme_id
-                updated += 1
-            continue
-        db.add(CollectedUser(
-            platform="douyin",
-            platform_uid=v.author_uid,
-            nickname=v.author_nickname,
-            avatar_url=v.author_avatar,
-            source_task_id=v.source_task_id,
-            source_note_id=v.aweme_id,
-            status="new",
-            owner_id=current_user.id,
-        ))
-        added += 1
-
-    await db.commit()
-    return {"added": added, "skipped": skipped, "updated": updated}
