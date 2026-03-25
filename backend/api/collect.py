@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func as sa_func, delete as sa_delete
 from database import get_db
-from models.task import CollectTask, VideoPost, PostComment, XhsNote, XhsComment, XhsVideo, XhsImage
+from models.task import CollectTask, VideoPost, PostComment, XhsNote, XhsComment, XhsVideo, XhsImage, DouyinPost, DouyinComment
 from models.user import CollectedUser
 from models.auth_user import AuthUser
 from services.auth import get_current_user
@@ -87,6 +87,8 @@ async def run_task(task_id: int, db: AsyncSession = Depends(get_db), current_use
         return await _save_video_comments(db, task, result)
     if task.platform == "xhs":
         return await _save_xhs_notes(db, task, result)
+    if task.platform == "douyin":
+        return await _save_douyin_posts(db, task, result)
     return await _save_users(db, task, result)
 
 
@@ -115,6 +117,13 @@ async def delete_task(task_id: int, db: AsyncSession = Depends(get_db), current_
     )
     await db.execute(
         sa_delete(XhsNote).where(XhsNote.source_task_id == task_id)
+    )
+    # 删除关联的抖音数据
+    await db.execute(
+        sa_delete(DouyinComment).where(DouyinComment.source_task_id == task_id)
+    )
+    await db.execute(
+        sa_delete(DouyinPost).where(DouyinPost.source_task_id == task_id)
     )
     await db.delete(task)
     await db.commit()
@@ -217,13 +226,14 @@ async def _do_collect(task: CollectTask, db: AsyncSession):
     from collector.factory import create_crawler
     from models.account import PlatformAccount
     import logging
+    import asyncio
 
     logger = logging.getLogger(__name__)
     crawler = create_crawler(task.platform)
 
     # 从数据库获取对应平台的活跃账号 cookie（按 owner_id 过滤）
     cookie_str = ""
-    if task.platform == "xhs":
+    if task.platform in ("xhs", "douyin"):
         result = await db.execute(
             select(PlatformAccount).where(
                 PlatformAccount.platform == task.platform,
@@ -234,15 +244,93 @@ async def _do_collect(task: CollectTask, db: AsyncSession):
         account = result.scalar_one_or_none()
         if account and account.cookies:
             cookie_str = account.cookies
+        else:
+            error_msg = f"未找到{task.platform}平台的活跃账号，请在账号管理中配置{task.platform}账号并设置Cookie"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-    result = await crawler.collect(task, cookie_str=cookie_str)
+    # 设置全局采集超时：抖音采集较慢，设置为600秒（10分钟）；其他平台300秒
+    timeout_seconds = 600 if task.platform == "douyin" else 300
+    try:
+        result = await asyncio.wait_for(
+            crawler.collect(task, cookie_str=cookie_str),
+            timeout=timeout_seconds
+        )
+    except asyncio.TimeoutError:
+        error_msg = f"采集任务超时（{timeout_seconds}秒），任务已自动取消"
+        logger.error(error_msg)
+        raise TimeoutError(error_msg)
+
     logger.info(
         "Crawler result for task %s: %d videos, %d comments",
         task.id,
-        len(result.get("videos", result.get("notes", []))),
+        len(result.get("videos", result.get("notes", result.get("posts", [])))),
         len(result.get("comments", [])),
     )
     return result
+
+
+async def _save_douyin_posts(db: AsyncSession, task, data: dict) -> dict:
+    """保存抖音视频和评论到数据库"""
+    posts = data.get("posts", [])
+    comments = data.get("comments", [])
+
+    post_count = 0
+    post_dup = 0
+    for p in posts:
+        exists = await db.execute(
+            select(DouyinPost.id).where(DouyinPost.aweme_id == p["aweme_id"]).limit(1)
+        )
+        if exists.scalar() is not None:
+            post_dup += 1
+            continue
+        db.add(DouyinPost(
+            aweme_id=p["aweme_id"],
+            desc=p.get("desc", ""),
+            author_uid=p.get("author_uid", ""),
+            author_name=p.get("author_name", ""),
+            author_avatar=p.get("author_avatar", ""),
+            like_count=p.get("like_count", 0),
+            comment_count=p.get("comment_count", 0),
+            share_count=p.get("share_count", 0),
+            collect_count=p.get("collect_count", 0),
+            play_count=p.get("play_count", 0),
+            duration=p.get("duration", 0),
+            cover_url=p.get("cover_url", ""),
+            video_url=p.get("video_url", ""),
+            create_time=p.get("create_time", 0),
+            source_task_id=task.id,
+        ))
+        post_count += 1
+
+    comment_count = 0
+    for c in comments:
+        exists = await db.execute(
+            select(DouyinComment.id).where(
+                DouyinComment.comment_id == c["comment_id"]
+            ).limit(1)
+        )
+        if exists.scalar() is not None:
+            continue
+        db.add(DouyinComment(
+            comment_id=c["comment_id"],
+            aweme_id=c.get("aweme_id", ""),
+            content=c.get("content", ""),
+            user_id=c.get("user_id", ""),
+            nickname=c.get("nickname", ""),
+            avatar=c.get("avatar", ""),
+            ip_location=c.get("ip_location", ""),
+            like_count=c.get("like_count", 0),
+            reply_count=c.get("reply_count", 0),
+            create_time=c.get("create_time", 0),
+            source_task_id=task.id,
+        ))
+        comment_count += 1
+
+    task.collected_count = post_count + post_dup
+    task.status = "done"
+    await db.commit()
+    return {"collected_posts": post_count, "collected_comments": comment_count, "post_duplicates": post_dup}
 
 
 async def _save_xhs_notes(db: AsyncSession, task, data: dict) -> dict:
@@ -1189,6 +1277,96 @@ async def download_xhs_images(
 
 
 
+
+
+@router.get("/douyin-posts")
+async def list_douyin_posts(
+    task_id: int = Query(...),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: AuthUser = Depends(get_current_user),
+):
+    q = select(DouyinPost).where(
+        DouyinPost.source_task_id == task_id
+    ).order_by(
+        DouyinPost.create_time.desc(),
+    )
+    total_q = select(sa_func.count(DouyinPost.id)).where(
+        DouyinPost.source_task_id == task_id
+    )
+    total = await db.scalar(total_q) or 0
+    result = await db.execute(q.offset((page - 1) * size).limit(size))
+    posts = result.scalars().all()
+    return {
+        "total": total,
+        "items": [
+            {
+                "id": p.id,
+                "aweme_id": p.aweme_id,
+                "desc": p.desc or "",
+                "author_uid": p.author_uid or "",
+                "author_name": p.author_name or "",
+                "author_avatar": p.author_avatar or "",
+                "like_count": p.like_count or 0,
+                "comment_count": p.comment_count or 0,
+                "share_count": p.share_count or 0,
+                "collect_count": p.collect_count or 0,
+                "play_count": p.play_count or 0,
+                "duration": p.duration or 0,
+                "cover_url": p.cover_url or "",
+                "video_url": p.video_url or "",
+                "create_time": p.create_time or 0,
+            }
+            for p in posts
+        ],
+    }
+
+
+@router.get("/douyin-comments")
+async def list_douyin_comments(
+    task_id: int = Query(...),
+    aweme_id: str = Query(None),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: AuthUser = Depends(get_current_user),
+):
+    base = select(DouyinComment).where(
+        DouyinComment.source_task_id == task_id
+    )
+    if aweme_id:
+        base = base.where(DouyinComment.aweme_id == aweme_id)
+
+    q = base.order_by(DouyinComment.create_time.desc())
+    total_q = select(sa_func.count(DouyinComment.id)).where(
+        DouyinComment.source_task_id == task_id
+    )
+    if aweme_id:
+        total_q = total_q.where(DouyinComment.aweme_id == aweme_id)
+
+    total = await db.scalar(total_q) or 0
+    result = await db.execute(q.offset((page - 1) * size).limit(size))
+    comments = result.scalars().all()
+    return {
+        "total": total,
+        "items": [
+            {
+                "id": c.id,
+                "comment_id": c.comment_id,
+                "aweme_id": c.aweme_id or "",
+                "content": c.content or "",
+                "user_id": c.user_id or "",
+                "nickname": c.nickname or "",
+                "avatar": c.avatar or "",
+                "ip_location": c.ip_location or "",
+                "like_count": c.like_count or 0,
+                "reply_count": c.reply_count or 0,
+                "create_time": c.create_time or 0,
+            }
+            for c in comments
+        ],
+    }
 
 
 # ── 抖音提取作者 ──────────────────────────────────────────────

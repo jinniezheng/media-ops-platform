@@ -297,9 +297,9 @@
             </a>
           </template>
         </el-table-column>
-        <el-table-column prop="author_nickname" label="作者" width="120" />
+        <el-table-column prop="author_name" label="作者" width="120" />
         <el-table-column prop="play_count" label="播放" width="80" />
-        <el-table-column prop="digg_count" label="点赞" width="80" />
+        <el-table-column prop="like_count" label="点赞" width="80" />
         <el-table-column prop="comment_count" label="评论" width="80" />
         <el-table-column prop="share_count" label="分享" width="80" />
         <el-table-column label="时间" width="160">
@@ -350,9 +350,9 @@
         @selection-change="onDouyinCommentSelectionChange">
         <el-table-column type="selection" width="45" />
         <el-table-column prop="nickname" label="用户" width="120" />
-        <el-table-column prop="text" label="评论内容"
+        <el-table-column prop="content" label="评论内容"
           min-width="260" show-overflow-tooltip />
-        <el-table-column prop="digg_count" label="点赞" width="70" />
+        <el-table-column prop="like_count" label="点赞" width="70" />
         <el-table-column prop="ip_location" label="IP" width="80" />
         <el-table-column label="时间" width="160">
           <template #default="{ row }">
@@ -563,7 +563,7 @@ const runTask = async (row: any) => {
       ElMessage.success(msg)
     } else if (row.platform === 'douyin') {
       ElMessage.success(
-        `采集完成: ${data.collected_videos} 个视频, ${data.collected_comments} 条评论`
+        `采集完成: ${data.collected_posts} 个视频, ${data.collected_comments} 条评论`
       )
     } else if (row.task_type === 'video_comment') {
       ElMessage.success(
@@ -855,7 +855,7 @@ const viewDouyinVideos = async (taskId: number) => {
 
 const loadDouyinVideos = async () => {
   try {
-    const { data } = await http.get('/api/collect/douyin-videos', {
+    const { data } = await http.get('/api/collect/douyin-posts', {
       params: { task_id: currentDouyinTaskId.value, page: douyinVideoPage.value, size: 20 },
     })
     douyinVideoList.value = data.items
@@ -886,7 +886,7 @@ const viewDouyinComments = async (awemeId: string, desc: string = '') => {
 const loadDouyinComments = async () => {
   try {
     const { data } = await http.get('/api/collect/douyin-comments', {
-      params: { aweme_id: currentDouyinAwemeId.value, page: douyinCommentPage.value, size: 20 },
+      params: { task_id: currentDouyinTaskId.value, aweme_id: currentDouyinAwemeId.value, page: douyinCommentPage.value, size: 20 },
     })
     douyinCommentList.value = data.items
     douyinCommentTotal.value = data.total || 0
@@ -918,7 +918,7 @@ const addDouyinVideosToTouch = async () => {
   const douyin_videos = selectedDouyinVideos.value.map((v: any) => ({
     aweme_id: v.aweme_id,
     desc: v.desc || '(无描述)',
-    author_nickname: v.author_nickname || '',
+    author_name: v.author_name || '',
   }))
   try {
     const { data } = await http.post('/api/message/touch', { douyin_videos })
@@ -931,11 +931,11 @@ const addDouyinVideosToTouch = async () => {
 
 const addDouyinCommentsToTouch = async () => {
   const douyin_comments = selectedDouyinComments.value.map((c: any) => ({
-    cid: c.cid,
+    cid: c.comment_id,
     aweme_id: currentDouyinAwemeId.value,
     video_desc: currentDouyinVideoDesc.value,
     nickname: c.nickname,
-    text: c.text,
+    text: c.content,
   }))
   try {
     const { data } = await http.post('/api/message/touch', { douyin_comments })

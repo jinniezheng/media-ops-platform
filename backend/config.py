@@ -15,8 +15,10 @@ class Settings(BaseSettings):
     # CORS
     CORS_ORIGINS: list[str] = [
         "http://localhost:5174",
+        "http://localhost:5175",
         "http://localhost:3000",
         "http://192.168.6.188:5174",
+        "http://192.168.103.207:5175",
     ]
 
     # Bilibili

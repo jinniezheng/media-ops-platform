@@ -24,6 +24,7 @@ async def init_db():
         migrations = [
             "ALTER TABLE collected_users ADD COLUMN owner_id INTEGER DEFAULT 0",
             "ALTER TABLE touch_records ADD COLUMN xsec_token VARCHAR(256) DEFAULT ''",
+            "ALTER TABLE touch_records ADD COLUMN target_comment_id VARCHAR(64) DEFAULT ''",
         ]
         for sql in migrations:
             try:

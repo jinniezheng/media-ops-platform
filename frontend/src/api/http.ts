@@ -5,8 +5,8 @@ import axios from 'axios'
 const isDev = import.meta.env.DEV
 
 const http = axios.create({
-  baseURL: isDev ? `http://${window.location.hostname}:8001` : '',
-  timeout: 120000,
+  baseURL: isDev ? `http://${window.location.hostname}:8000` : '',
+  timeout: 600000, // 10分钟，适应抖音等长耗时采集任务
 })
 
 // 请求拦截器：自动附加 Authorization header

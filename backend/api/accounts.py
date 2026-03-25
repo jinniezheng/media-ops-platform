@@ -73,6 +73,15 @@ async def check_account_cookie(account_id: int, db: AsyncSession = Depends(get_d
         from services.xhs_sender import check_xhs_cookie
         result = await check_xhs_cookie(acc.cookies)
         return result
+    elif acc.platform == "douyin":
+        from services.douyin_checker import check_douyin_cookie
+        result = await check_douyin_cookie(acc.cookies)
+        # 统一字段名：douyin_checker 返回 "message"，前端期望 "msg"
+        return {
+            "valid": result.get("valid", False),
+            "nickname": result.get("nickname", ""),
+            "msg": result.get("msg", result.get("message", ""))
+        }
 
     # bilibili 暂不支持检测，直接返回未知
     return {"valid": None, "msg": f"暂不支持 {acc.platform} 平台的 Cookie 检测"}

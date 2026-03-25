@@ -90,7 +90,7 @@ class XhsCommentItem(BaseModel):
 class DouyinVideoItem(BaseModel):
     aweme_id: str
     desc: str
-    author_nickname: str = ""
+    author_name: str = ""
 
 
 class DouyinCommentItem(BaseModel):
@@ -185,7 +185,7 @@ async def create_touch(
         db.add(TouchRecord(
             user_id=current_user.id, touch_type="comment",
             platform="douyin", target_note_id=v.aweme_id,
-            target_note_title=v.desc, target_uname=v.author_nickname,
+            target_note_title=v.desc, target_uname=v.author_name,
             target_message="", status="pending",
         ))
         created += 1

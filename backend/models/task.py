@@ -164,3 +164,45 @@ class XhsImage(Base):
     local_path = Column(Text)
     source_task_id = Column(Integer, index=True)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class DouyinPost(Base):
+    """抖音视频"""
+    __tablename__ = "douyin_posts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    aweme_id = Column(String(64), nullable=False, index=True)
+    desc = Column(Text)
+    author_uid = Column(String(64))
+    author_name = Column(String(128))
+    author_avatar = Column(Text)
+    like_count = Column(Integer, default=0)
+    comment_count = Column(Integer, default=0)
+    share_count = Column(Integer, default=0)
+    collect_count = Column(Integer, default=0)
+    play_count = Column(Integer, default=0)
+    duration = Column(Integer, default=0)  # 毫秒
+    cover_url = Column(Text)
+    video_url = Column(Text)
+    create_time = Column(Integer, default=0)
+    source_task_id = Column(Integer, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class DouyinComment(Base):
+    """抖音评论"""
+    __tablename__ = "douyin_comments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    comment_id = Column(String(64), nullable=False, index=True)
+    aweme_id = Column(String(64), index=True)
+    content = Column(Text)
+    user_id = Column(String(64))
+    nickname = Column(String(128))
+    avatar = Column(Text)
+    ip_location = Column(String(64))
+    like_count = Column(Integer, default=0)
+    reply_count = Column(Integer, default=0)
+    create_time = Column(Integer, default=0)
+    source_task_id = Column(Integer, index=True)
+    created_at = Column(DateTime, server_default=func.now())
